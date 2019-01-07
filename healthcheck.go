@@ -7,6 +7,10 @@ package healthcheck
 
 import (
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 type Health struct {
@@ -55,7 +59,23 @@ func (h *Health) handler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(500)
 }
 
-func (h *Health) Serve(addr string) error {
+// Start a webserver on `addr` (":8080"). If you specify `delayStop`, the it will set the health to false on sigterm
+// and keep serving the health check status `500` for that time. This is to make sure that in flight requests get
+// handled while the load balancer finds out we're stopping.
+func (h *Health) Serve(addr string, delayStop time.Duration) error {
+	if delayStop != 0 {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-c
+			for name := range h.health {
+				h.Update(name, false)
+			}
+			time.Sleep(delayStop)
+			os.Exit(1)
+		}()
+	}
+
 	http.HandleFunc("/health", h.handler)
 	return http.ListenAndServe(addr, nil)
 }
